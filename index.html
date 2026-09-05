@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Character Bingo Maker</title>
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@700&display=swap" rel="stylesheet">
+<style>
+  .bingo-font { font-family: 'Quicksand', 'Segoe UI', Arial, sans-serif; }
+  #board { container-type: inline-size; }
+  #title { font-size: 7cqw; line-height: 1.1; padding: 1.5cqw 0 2.5cqw; }
+  #grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; background: #000; border: 3px solid #000; }
+  .cell { position: relative; aspect-ratio: 1 / 1; background: #fff; overflow: hidden; cursor: pointer; container-type: inline-size; }
+  .cell img, #cropStage img { position: absolute; max-width: none; pointer-events: none; user-select: none; -webkit-user-drag: none; }
+  .cell .hint, .cell .free-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+  .cell .hint { font-size: 28cqw; color: #d1d5db; font-weight: 300; transition: all .15s; }
+  .cell:hover .hint { color: #2563eb; background: #eff6ff; }
+  .cell .free-text { text-align: center; font-size: 26cqw; line-height: 1.15; font-weight: 700; color: #000; }
+  .cell.free { cursor: default; }
+  .cell.dragover { outline: 4px dashed #2563eb; outline-offset: -4px; }
+  .cell:has(img):hover::after { content: 'Adjust crop'; position: absolute; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.6); color: #fff; font: 600 11px system-ui, sans-serif; text-align: center; padding: 4px 0; }
+  #cropStage { position: relative; overflow: hidden; touch-action: none; cursor: grab; background: #fff; width: min(80vw, 380px); aspect-ratio: 1 / 1; }
+  #cropStage:active { cursor: grabbing; }
+</style>
+</head>
+<body class="bg-gray-100 min-h-screen text-gray-800">
+  <div class="max-w-3xl mx-auto px-4 py-6">
+    <header class="mb-4">
+      <h1 class="text-2xl font-bold">Character Bingo Maker</h1>
+      <p class="text-sm text-gray-500">Click a square to add a photo · click a photo to adjust its crop · you can also drag &amp; drop or paste images.</p>
+    </header>
+
+    <div class="flex flex-wrap items-center gap-2 mb-4">
+      <button id="addBtn" class="cursor-pointer px-3 py-2 rounded-lg bg-white border border-gray-300 hover:bg-gray-50 text-sm font-medium">+ Add images</button>
+      <label class="flex items-center gap-2 px-3 py-2 rounded-lg bg-white border border-gray-300 text-sm cursor-pointer select-none">
+        <input type="checkbox" id="freeToggle" checked class="accent-blue-600"> Free space in center
+      </label>
+      <button id="clearBtn" class="cursor-pointer px-3 py-2 rounded-lg bg-white border border-gray-300 hover:bg-gray-50 text-sm font-medium text-red-600">Clear all</button>
+      <button id="exportBtn" class="cursor-pointer ml-auto px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold shadow">Export PNG</button>
+    </div>
+
+    <div id="board" class="bg-white shadow-lg mx-auto w-full max-w-[640px] p-3 sm:p-4">
+      <input id="title" class="bingo-font block w-full text-center font-bold bg-transparent border-0 outline-none text-black placeholder:text-gray-300" value="Favorite Character Bingo" placeholder="Title" spellcheck="false">
+      <div id="grid"></div>
+    </div>
+  </div>
+
+  <input type="file" id="fileInput" accept="image/*" multiple class="hidden">
+
+  <!-- Crop modal -->
+  <div id="cropModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 p-4">
+    <div class="bg-white rounded-2xl shadow-2xl p-5 w-full max-w-md">
+      <h2 class="text-lg font-bold">Adjust crop</h2>
+      <p class="text-sm text-gray-500 mb-3">Drag the image to move it. Scroll or use the slider to zoom.</p>
+      <div id="cropStage" class="mx-auto border-[3px] border-black"><img id="cropImg" alt="" draggable="false"></div>
+      <div class="flex items-center gap-3 mt-4">
+        <span class="text-sm text-gray-600">Zoom</span>
+        <input type="range" id="zoomRange" min="1" max="4" step="0.01" value="1" class="flex-1 accent-blue-600">
+        <button id="cropReset" class="cursor-pointer text-sm text-blue-600 hover:underline">Reset</button>
+      </div>
+      <div class="flex flex-wrap gap-2 mt-4">
+        <button id="cropReplace" class="cursor-pointer px-3 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 text-sm">Replace</button>
+        <button id="cropRemove" class="cursor-pointer px-3 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 text-sm text-red-600">Remove</button>
+        <span class="flex-1"></span>
+        <button id="cropCancel" class="cursor-pointer px-3 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 text-sm">Cancel</button>
+        <button id="cropApply" class="cursor-pointer px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold">Apply</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const N = 5, CENTER = 12, MAX_ZOOM = 4;
+  const FONT = "'Quicksand', 'Segoe UI', Arial, sans-serif";
+  const $ = id => document.getElementById(id);
+  const grid = $('grid'), fileInput = $('fileInput'), titleInput = $('title'), freeToggle = $('freeToggle');
+  const cropModal = $('cropModal'), cropStage = $('cropStage'), cropImg = $('cropImg'), zoomRange = $('zoomRange');
+
+  // cells[i] = { img, url, iw, ih, zoom, cx, cy }  (cx/cy = image point (0..1) shown at the square's center)
+  const cells = Array(N * N).fill(null);
+  const cellEls = [];
+  const isFree = i => i === CENTER && freeToggle.checked;
+
+  /* ---------- crop geometry (shared by preview, editor and export) ---------- */
+  // Position/size of the image inside a square of size S (zoom 1 = "cover" fit)
+  function layout(c, S) {
+    const s = Math.max(S / c.iw, S / c.ih) * c.zoom;
+    const w = c.iw * s, h = c.ih * s;
+    return { w, h, x: S / 2 - c.cx * w, y: S / 2 - c.cy * h };
+  }
+  // Keep the image covering the whole square
+  function clampCrop(c) {
+    const { w, h } = layout(c, 1);
+    c.cx = Math.min(Math.max(c.cx, 0.5 / w), 1 - 0.5 / w);
+    c.cy = Math.min(Math.max(c.cy, 0.5 / h), 1 - 0.5 / h);
+  }
+  function applyToImg(el, c) {
+    const l = layout(c, 1);
+    el.style.width  = (l.w * 100) + '%';
+    el.style.height = (l.h * 100) + '%';
+    el.style.left   = (l.x * 100) + '%';
+    el.style.top    = (l.y * 100) + '%';
+  }
+
+  /* ---------- grid ---------- */
+  function renderCell(i) {
+    const el = cellEls[i];
+    el.innerHTML = '';
+    el.classList.toggle('free', isFree(i));
+    if (isFree(i)) { el.innerHTML = '<div class="free-text bingo-font">Free<br>Space</div>'; return; }
+    const c = cells[i];
+    if (c) {
+      const img = document.createElement('img');
+      img.src = c.url; img.alt = ''; img.draggable = false;
+      applyToImg(img, c);
+      el.appendChild(img);
+    } else {
+      el.innerHTML = '<div class="hint">+</div>';
+    }
+  }
+
+  for (let i = 0; i < N * N; i++) {
+    const el = document.createElement('div');
+    el.className = 'cell';
+    el.addEventListener('click', () => { if (isFree(i)) return; cells[i] ? openCrop(i) : pickFor(i); });
+    el.addEventListener('dragover', e => { if (isFree(i)) return; e.preventDefault(); el.classList.add('dragover'); });
+    el.addEventListener('dragleave', () => el.classList.remove('dragover'));
+    el.addEventListener('drop', e => { e.preventDefault(); el.classList.remove('dragover'); if (!isFree(i)) loadFiles(e.dataTransfer.files, i); });
+    grid.appendChild(el);
+    cellEls.push(el);
+    renderCell(i);
+  }
+
+  /* ---------- loading images ---------- */
+  let pickIndex = 0;
+  function pickFor(i) { pickIndex = i; fileInput.value = ''; fileInput.click(); }
+  fileInput.addEventListener('change', () => loadFiles(fileInput.files, pickIndex));
+
+  function loadImage(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
+  // First file goes to `start` (replacing if needed); extra files fill the following empty squares
+  async function loadFiles(fileList, start) {
+    const files = Array.from(fileList || []).filter(f => f.type.startsWith('image/'));
+    let i = start;
+    for (const file of files) {
+      while (i < N * N && (isFree(i) || (i !== start && cells[i]))) i++;
+      if (i >= N * N) break;
+      try {
+        const img = await loadImage(file);
+        if (cells[i]) URL.revokeObjectURL(cells[i].url);
+        cells[i] = { img, url: img.src, iw: img.naturalWidth, ih: img.naturalHeight, zoom: 1, cx: 0.5, cy: 0.5 };
+        renderCell(i);
+        i++;
+      } catch (e) { alert(`Couldn't load "${file.name}".`); }
+    }
+  }
+
+  function firstEmpty() { for (let i = 0; i < N * N; i++) if (!isFree(i) && !cells[i]) return i; return -1; }
+  function removeCell(i) { if (!cells[i]) return; URL.revokeObjectURL(cells[i].url); cells[i] = null; renderCell(i); }
+
+  /* ---------- crop editor ---------- */
+  let editIndex = -1, edit = null, dragging = false, lastX = 0, lastY = 0;
+
+  function openCrop(i) {
+    const c = cells[i];
+    editIndex = i;
+    edit = { iw: c.iw, ih: c.ih, zoom: c.zoom, cx: c.cx, cy: c.cy };
+    cropImg.src = c.url;
+    zoomRange.value = c.zoom;
+    updateCropView();
+    cropModal.classList.replace('hidden', 'flex');
+  }
+  function closeCrop() { cropModal.classList.replace('flex', 'hidden'); editIndex = -1; dragging = false; }
+  function updateCropView() { clampCrop(edit); applyToImg(cropImg, edit); }
+  function setZoom(z) { edit.zoom = Math.min(MAX_ZOOM, Math.max(1, z)); zoomRange.value = edit.zoom; updateCropView(); }
+
+  cropStage.addEventListener('pointerdown', e => {
+    e.preventDefault(); dragging = true; lastX = e.clientX; lastY = e.clientY;
+    cropStage.setPointerCapture(e.pointerId);
+  });
+  cropStage.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    const P = cropStage.clientWidth, l = layout(edit, 1);
+    edit.cx -= (e.clientX - lastX) / (l.w * P);
+    edit.cy -= (e.clientY - lastY) / (l.h * P);
+    lastX = e.clientX; lastY = e.clientY;
+    updateCropView();
+  });
+  ['pointerup', 'pointercancel'].forEach(t => cropStage.addEventListener(t, () => dragging = false));
+  cropStage.addEventListener('wheel', e => { e.preventDefault(); setZoom(edit.zoom * Math.exp(-e.deltaY * 0.002)); }, { passive: false });
+  zoomRange.addEventListener('input', () => setZoom(parseFloat(zoomRange.value)));
+
+  $('cropReset').onclick = () => { edit.cx = 0.5; edit.cy = 0.5; setZoom(1); };
+  $('cropApply').onclick = () => { Object.assign(cells[editIndex], { zoom: edit.zoom, cx: edit.cx, cy: edit.cy }); renderCell(editIndex); closeCrop(); };
+  $('cropCancel').onclick = closeCrop;
+  $('cropRemove').onclick = () => { const i = editIndex; closeCrop(); removeCell(i); };
+  $('cropReplace').onclick = () => { const i = editIndex; closeCrop(); pickFor(i); };
+  cropModal.addEventListener('click', e => { if (e.target === cropModal) closeCrop(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && editIndex >= 0) closeCrop(); });
+
+  /* ---------- toolbar ---------- */
+  $('addBtn').onclick = () => { const i = firstEmpty(); if (i < 0) return alert('All squares are filled.'); pickFor(i); };
+  freeToggle.onchange = () => renderCell(CENTER);
+  $('clearBtn').onclick = () => { if (!confirm('Remove all images?')) return; for (let i = 0; i < N * N; i++) removeCell(i); };
+  $('exportBtn').onclick = exportPNG;
+
+  /* ---------- paste + global drag/drop guard ---------- */
+  document.addEventListener('paste', e => {
+    const files = Array.from(e.clipboardData?.files || []).filter(f => f.type.startsWith('image/'));
+    if (!files.length) return;
+    const i = firstEmpty();
+    if (i < 0) return alert('All squares are filled.');
+    e.preventDefault();
+    loadFiles(files, i);
+  });
+  document.addEventListener('dragover', e => e.preventDefault());
+  document.addEventListener('drop', e => e.preventDefault());
+
+  /* ---------- export ---------- */
+  async function exportPNG() {
+    const btn = $('exportBtn');
+    btn.disabled = true; btn.textContent = 'Exporting…';
+    try {
+      const CELL = 360, LINE = 5;
+      const G = N * CELL + (N + 1) * LINE;
+      const title = titleInput.value.trim();
+      const titleH = title ? Math.round(G * 0.09) : 0;
+      const W = G, H = titleH + G;
+
+      const cv = document.createElement('canvas');
+      cv.width = W; cv.height = H;
+      const ctx = cv.getContext('2d');
+      ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+
+      // make sure the web font is available to the canvas (don't wait forever)
+      try { await Promise.race([document.fonts.load("700 40px 'Quicksand'"), new Promise(r => setTimeout(r, 2000))]); } catch (e) {}
+
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      if (title) {
+        let fs = Math.round(W * 0.07);
+        ctx.font = `700 ${fs}px ${FONT}`;
+        while (fs > 12 && ctx.measureText(title).width > W * 0.94) { fs -= 2; ctx.font = `700 ${fs}px ${FONT}`; }
+        ctx.fillStyle = '#000';
+        ctx.fillText(title, W / 2, titleH / 2);
+      }
+
+      // grid lines (black backdrop, white squares on top)
+      ctx.fillStyle = '#000'; ctx.fillRect(0, titleH, G, G);
+      for (let i = 0; i < N * N; i++) {
+        const r = Math.floor(i / N), c = i % N;
+        const x = LINE + c * (CELL + LINE), y = titleH + LINE + r * (CELL + LINE);
+        ctx.fillStyle = '#fff'; ctx.fillRect(x, y, CELL, CELL);
+        if (isFree(i)) {
+          ctx.fillStyle = '#000';
+          ctx.font = `700 ${Math.round(CELL * 0.26)}px ${FONT}`;
+          ctx.fillText('Free',  x + CELL / 2, y + CELL / 2 - CELL * 0.15);
+          ctx.fillText('Space', x + CELL / 2, y + CELL / 2 + CELL * 0.15);
+        } else if (cells[i]) {
+          const l = layout(cells[i], CELL);
+          ctx.save();
+          ctx.beginPath(); ctx.rect(x, y, CELL, CELL); ctx.clip();
+          ctx.drawImage(cells[i].img, x + l.x, y + l.y, l.w, l.h);
+          ctx.restore();
+        }
+      }
+
+      await new Promise(resolve => cv.toBlob(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = ((title || 'bingo').replace(/[^\w\- ]+/g, '').trim() || 'bingo') + '.png';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        resolve();
+      }, 'image/png'));
+    } finally {
+      btn.disabled = false; btn.textContent = 'Export PNG';
+    }
+  }
+})();
+</script>
+</body>
+</html>
